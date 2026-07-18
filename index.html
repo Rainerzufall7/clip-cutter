@@ -175,6 +175,15 @@
   .clip .nm { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .job-actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
 
+  #updBar {
+    display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    background: linear-gradient(95deg, rgba(124,58,237,.28), rgba(139,92,246,.10));
+    border: 1px solid var(--vio); border-radius: 10px;
+    padding: 10px 14px; margin-bottom: 14px; font-size: 14px;
+    box-shadow: 0 0 22px rgba(124,58,237,.3);
+    animation: fadeUp .3s ease both;
+  }
+  #updBar[hidden] { display: none; }
   #toasts { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); display: flex; flex-direction: column; gap: 8px; z-index: 50; }
   .toast {
     background: rgba(20,20,27,.92); backdrop-filter: blur(8px);
@@ -194,6 +203,10 @@
 </style>
 
 <div class="wrap">
+  <div id="updBar" hidden>
+    <span>🔄 <strong>Update verfügbar</strong> — Version <span id="updNew"></span> ist da! Schließe die App und öffne sie neu, das Update installiert sich automatisch.</span>
+    <button class="ghost" id="updClose" title="Ausblenden">✕</button>
+  </div>
   <header class="top">
     <div class="logo-row">
       <img class="st-logo" src="" alt="ST Logo">
@@ -242,7 +255,7 @@
 
   <footer class="note">
     Fertige Kill-Clips kannst du einzeln oder alle zusammen speichern – den Ordner wählst du selbst.
-    <div style="margin-top:8px;opacity:.55" class="mono">Version 1.0</div>
+    <div style="margin-top:8px;opacity:.55" class="mono" id="verLbl"></div>
   </footer>
 </div>
 
@@ -251,6 +264,7 @@
 
 <script>
 "use strict";
+const APP_VERSION = "1.1";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -761,6 +775,21 @@ $("#fileVid").addEventListener("change", e => { enqueueFiles(e.target.files); e.
 drop.addEventListener("drop", e => enqueueFiles(e.dataTransfer.files));
 
 loadSettings();
+$("#verLbl").textContent = "Version " + APP_VERSION;
+$("#updClose").addEventListener("click", () => { $("#updBar").hidden = true; });
+
+/* Update-Check: gibt es auf GitHub eine neuere Version? */
+try {
+  fetch("https://raw.githubusercontent.com/Rainerzufall7/clip-cutter/main/version.json", { cache: "no-store" })
+    .then(r => r.json())
+    .then(j => {
+      if (j && j.version && j.version !== APP_VERSION) {
+        $("#updNew").textContent = j.version;
+        $("#updBar").hidden = false;
+      }
+    })
+    .catch(() => {});
+} catch (e) {}
 
 /* Als PC-App (Datei-Modus): Fenster auf handliche Größe bringen und zentrieren */
 if (location.protocol === "file:") {
