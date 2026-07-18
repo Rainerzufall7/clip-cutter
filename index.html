@@ -121,8 +121,12 @@
   #drop.over, #drop:hover { border-color: var(--vio); box-shadow: 0 0 30px rgba(124,58,237,.18) inset; transform: translateY(-1px); }
   #drop .icon { margin-bottom: 8px; filter: drop-shadow(0 0 12px rgba(139,92,246,.4)); transition: transform .2s; }
   #drop:hover .icon, #drop.over .icon { transform: scale(1.12); }
-  #drop .big { font-size: 18px; font-weight: 800; letter-spacing: .03em; }
-  #drop .sub { color: var(--mut); margin-top: 7px; font-size: 12.5px; line-height: 1.65; }
+  #drop .big { font-size: 19px; font-weight: 800; letter-spacing: .03em; }
+  #drop .sub { color: var(--mut); margin-top: 6px; font-size: 12.5px; line-height: 1.65; }
+  #drop .sub.tiny { font-size: 11.5px; opacity: .7; margin-top: 14px; }
+  #drop button { margin-top: 16px; padding: 10px 26px; }
+  @keyframes breathe { 0%, 100% { box-shadow: 0 0 0 rgba(124,58,237,0) inset; } 50% { box-shadow: 0 0 30px rgba(124,58,237,.12) inset; } }
+  #drop { animation: breathe 5s ease-in-out infinite; }
 
   section.card {
     background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
@@ -162,15 +166,24 @@
   .tl .ev { position: absolute; top: 0; bottom: 0; background: rgba(124,58,237,.35); border-left: 1px solid var(--vio2); border-right: 1px solid var(--vio2); }
   .tl .mk { position: absolute; top: 3px; bottom: 3px; width: 2px; background: #fff; box-shadow: 0 0 8px var(--vio2); }
 
-  .results { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin-top: 14px; }
+  .results { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-top: 14px; }
   .clip {
-    background: var(--panel2); border: 1px solid var(--line); border-radius: 10px; padding: 10px;
-    display: flex; flex-direction: column; gap: 8px;
+    background: var(--panel2); border: 1px solid var(--line); border-radius: 12px; overflow: hidden;
+    display: flex; flex-direction: column;
     transition: transform .15s, border-color .15s, box-shadow .15s;
     animation: fadeUp .4s ease both;
   }
-  .clip:hover { transform: translateY(-2px); border-color: #3b2f5c; box-shadow: 0 8px 26px rgba(0,0,0,.35); }
-  .clip video { width: 100%; border-radius: 6px; background: #000; }
+  .clip:hover { transform: translateY(-3px); border-color: var(--vio-deep); box-shadow: 0 10px 30px rgba(0,0,0,.4), 0 0 18px rgba(124,58,237,.15); }
+  .clip .thumb { position: relative; background: #000; }
+  .clip video { display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; }
+  .clip .badge {
+    position: absolute; top: 8px; left: 8px; transform: skewX(-10deg); pointer-events: none;
+    background: linear-gradient(95deg, var(--vio-deep), var(--vio)); color: #fff;
+    font-size: 10.5px; font-weight: 800; letter-spacing: .1em; padding: 3px 10px; border-radius: 3px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.55);
+  }
+  .clip .badge > span { display: inline-block; transform: skewX(10deg); }
+  .clip .body { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 12px; }
   .clip .meta { font-size: 12px; color: var(--mut); display: flex; justify-content: space-between; }
   .clip .nm { font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .job-actions { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
@@ -246,9 +259,9 @@
   <div id="drop">
     <div class="icon"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="3"/><path d="M7 4v16M17 4v16M2 9h5M2 15h5M17 9h5M17 15h5"/></svg></div>
     <div class="big">Clips hier reinziehen</div>
-    <div class="sub">oder klicken zum Auswählen &middot; mehrere gleichzeitig möglich<br>
-    Die App findet jeden Kill automatisch (QR-Code-Anzeige) und schneidet ihn passend zu.<br>
-    Deine Videos bleiben auf deinem PC – nichts wird hochgeladen.</div>
+    <div class="sub">MP4 &middot; WebM &middot; MKV &middot; mehrere gleichzeitig möglich</div>
+    <button class="primary" id="btnPick">Clips auswählen</button>
+    <div class="sub tiny">Kills werden automatisch erkannt &middot; deine Videos bleiben auf deinem PC</div>
   </div>
 
   <div id="jobs"></div>
@@ -264,7 +277,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "1.1";
+const APP_VERSION = "1.2";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -651,11 +664,19 @@ function renderTimeline(job) {
     tl.appendChild(d);
   }
 }
-function addClipCard(job, clip) {
+function addClipCard(job, clip, nr) {
   const div = document.createElement("div");
   div.className = "clip";
+  const thumb = document.createElement("div");
+  thumb.className = "thumb";
   const v = document.createElement("video");
   v.controls = true; v.preload = "metadata"; v.src = clip.url;
+  const badge = document.createElement("span");
+  badge.className = "badge";
+  badge.innerHTML = "<span>KILL " + nr + "</span>";
+  thumb.append(v, badge);
+  const body = document.createElement("div");
+  body.className = "body";
   const nm = document.createElement("div");
   nm.className = "nm"; nm.textContent = clip.name; nm.title = clip.name;
   const meta = document.createElement("div");
@@ -665,7 +686,8 @@ function addClipCard(job, clip) {
   btn.className = "primary";
   btn.textContent = "Speichern";
   btn.addEventListener("click", () => saveClips([clip]));
-  div.append(v, nm, meta, btn);
+  body.append(nm, meta, btn);
+  div.append(thumb, body);
   $(".results", job.el).appendChild(div);
 }
 async function processJob(job) {
@@ -697,7 +719,7 @@ async function processJob(job) {
         range: fmtT(s) + "–" + fmtT(e)
       };
       job.clips.push(clip);
-      addClipCard(job, clip);
+      addClipCard(job, clip, i + 1);
     }
     job.setStatus("done", job.clips.length + (job.clips.length === 1 ? " Kill" : " Kills"));
     job.setProgress(1, "Fertig! " + job.clips.length + " Kill-Clip" + (job.clips.length === 1 ? "" : "s") + " geschnitten.");
@@ -769,6 +791,7 @@ async function saveClips(clips) {
 /* ---------- Drag & Drop ---------- */
 const drop = $("#drop");
 drop.addEventListener("click", () => $("#fileVid").click());
+$("#btnPick").addEventListener("click", e => { e.stopPropagation(); $("#fileVid").click(); });
 $("#fileVid").addEventListener("change", e => { enqueueFiles(e.target.files); e.target.value = ""; });
 ["dragover", "dragenter"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
 ["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
