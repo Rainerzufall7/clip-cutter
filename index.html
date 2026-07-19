@@ -278,7 +278,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "1.8";
+const APP_VERSION = "1.9";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -486,10 +486,10 @@ async function scanVideo(job, turbo) {
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw) throw new Error("Video hat keine Bildspur");
   /* Nur der Bereich unten links wird analysiert – dort sitzt der QR-Code.
-     Auf ~640 px Breite herunterskaliert: schnell, aber fein genug für die QR-Muster. */
+     Auflösung bis 1280 px Breite: scharf genug, damit auch kleine QR-Codes erkannt werden. */
   const sx = 0, sy = Math.round(vh * 0.35);
   const sw = Math.round(vw * 0.48), sh = vh - sy;
-  const scale = Math.min(1, 640 / sw);
+  const scale = Math.min(1, 1280 / sw);
   const cw = Math.max(1, Math.round(sw * scale)), ch = Math.max(1, Math.round(sh * scale));
   const cQr = mkCanvas(cw, ch);
   const xQr = cQr.getContext("2d", { willReadFrequently: true });
@@ -511,7 +511,7 @@ async function scanVideo(job, turbo) {
   /* Deterministisches Abtasten: garantiert jeden Abschnitt geprüft – nichts wird übersprungen.
      Grober Schritt (0,5 s) für Tempo; sobald ein QR-Code gefunden wird, wird der genaue
      Start-Zeitpunkt rückwärts in feinen Schritten eingegrenzt (für exakten Vor-/Nachlauf). */
-  const STEP = turbo ? 1.2 : 0.6, FINE = 0.15;
+  const STEP = turbo ? 0.9 : 0.5, FINE = 0.15;
   let t = 0;
   while (t < dur) {
     if (job.cancelled) break;
