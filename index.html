@@ -277,7 +277,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "1.4";
+const APP_VERSION = "1.5";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -489,19 +489,72 @@ async function scanVideo(job) {
   const cQr = mkCanvas(cw, ch);
   const xQr = cQr.getContext("2d", { willReadFrequently: true });
   const hits = [];
-  video.muted = true;
-  video.pause();
   const dur = video.duration;
-  for (let t = 0; t < dur; t += SAMPLE_DT) {
-    if (job.cancelled) break;
-    video.currentTime = t;
-    const seekOk = await waitEventT(video, "seeked", 4000);
-    if (!seekOk) continue;
+  const sample = t => {
     xQr.drawImage(video, sx, sy, sw, sh, 0, 0, cw, ch);
     const gQ = grayFromCtx(xQr, cw, ch);
     if (detectQRPattern(gQ, cw, ch)) hits.push(t);
     job.setProgress(t / dur, "Suche Kills … " + fmtT(t) + " / " + fmtT(dur) +
       (hits.length ? " · " + hits.length + " Treffer" : ""));
+  };
+
+  video.muted = true;
+  if (video.requestVideoFrameCallback) {
+    /* Schnell-Analyse: Video läuft mit 8x durch und wird live gescannt.
+       Ist das Fenster minimiert, wird auf 2x gedrosselt und per Intervall gescannt,
+       damit keine Kills verpasst werden. */
+    const setRate = () => { try { video.playbackRate = document.hidden ? 2 : 8; } catch (e) { video.playbackRate = 2; } };
+    setRate();
+    document.addEventListener("visibilitychange", setRate);
+    video.currentTime = 0;
+    await waitEventT(video, "seeked", 4000);
+    await video.play();
+    await new Promise(resolve => {
+      let last = -1, lastSeen = 0, lastAdvance = Date.now(), lastSampleWall = 0, done = false, guard = 0;
+      const finish = () => {
+        if (!done) {
+          done = true;
+          clearInterval(guard);
+          document.removeEventListener("visibilitychange", setRate);
+          resolve();
+        }
+      };
+      video.addEventListener("ended", finish, { once: true });
+      const doSample = t => { last = t; lastSampleWall = Date.now(); try { sample(t); } catch (e) {} };
+      const step = (now, meta) => {
+        if (done) return;
+        if (job.cancelled) { finish(); return; }
+        if (meta.mediaTime - last >= SAMPLE_DT) doSample(meta.mediaTime);
+        video.requestVideoFrameCallback(step);
+      };
+      video.requestVideoFrameCallback(step);
+      guard = setInterval(() => {
+        if (job.cancelled) { finish(); return; }
+        const t = video.currentTime;
+        if (t >= dur - 0.3) { finish(); return; }
+        /* Fenster minimiert: Frame-Meldungen pausieren → direkt per Intervall scannen */
+        if (Date.now() - lastSampleWall > 400 && t - last >= SAMPLE_DT) doSample(t);
+        if (t > lastSeen + 0.05) { lastSeen = t; lastAdvance = Date.now(); return; }
+        const stuck = Date.now() - lastAdvance;
+        if (stuck > 2500) video.play().catch(function () {});
+        if (stuck > 4500) {
+          try { video.currentTime = Math.min(dur, t + 1); } catch (e) {}
+          lastAdvance = Date.now();
+        }
+      }, 200);
+    });
+    video.pause();
+    video.playbackRate = 1;
+  } else {
+    /* Fallback: Frame für Frame springen */
+    video.pause();
+    for (let t = 0; t < dur; t += SAMPLE_DT) {
+      if (job.cancelled) break;
+      video.currentTime = t;
+      const seekOk = await waitEventT(video, "seeked", 4000);
+      if (!seekOk) continue;
+      sample(t);
+    }
   }
   return hits;
 }
