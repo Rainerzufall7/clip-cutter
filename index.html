@@ -278,7 +278,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "1.9";
+const APP_VERSION = "2.0";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -595,11 +595,19 @@ async function cutEvent(job, start, end, label, opts) {
 
   /* Frames auf eine eigene Zeichenfläche (Canvas) malen und DIE aufnehmen.
      Kommt der Encoder nicht hinterher, lässt er nur Canvas-Frames weg – das
-     Video selbst läuft weiter. So bleibt der Schnitt auf keinem PC hängen. */
-  const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
-  const canvas = mkCanvas(vw, vh);
+     Video selbst läuft weiter. So bleibt der Schnitt auf keinem PC hängen.
+     WICHTIG: gerade Bildmaße (H.264 verlangt das, sonst wird das Bild zerstört)
+     und Auflösung auf max. 1920 begrenzen. */
+  const rawW = video.videoWidth || 1280, rawH = video.videoHeight || 720;
+  const fit = Math.min(1, 1920 / rawW);
+  let cw = Math.round(rawW * fit), ch = Math.round(rawH * fit);
+  cw -= cw % 2; ch -= ch % 2;
+  if (cw < 2) cw = 2;
+  if (ch < 2) ch = 2;
+  const canvas = mkCanvas(cw, ch);
   const cx = canvas.getContext("2d", { alpha: false });
-  cx.drawImage(video, 0, 0, vw, vh);
+  cx.imageSmoothingQuality = "high";
+  cx.drawImage(video, 0, 0, cw, ch);
 
   const capStream = canvas.captureStream(30);
   const dest = opts.mute ? null : ensureAudioGraph(job);
@@ -610,23 +618,21 @@ async function cutEvent(job, start, end, label, opts) {
   const mime = pickMime();
   const rec = new MediaRecorder(stream, {
     mimeType: mime || undefined,
-    videoBitsPerSecond: opts.compress ? 2_500_000 : 6_000_000,
+    videoBitsPerSecond: opts.compress ? 3_000_000 : 10_000_000,
     audioBitsPerSecond: opts.compress ? 96_000 : 160_000
   });
   const chunks = [];
   rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
   const stopped = new Promise(res => { rec.onstop = res; });
 
-  /* Frames zeichnen, solange geschnitten wird */
+  /* Eine einzige Zeichenschleife (requestAnimationFrame), zeichnet das aktuelle Videobild */
   let drawing = true;
-  const draw = () => {
+  const rafDraw = () => {
     if (!drawing) return;
-    try { cx.drawImage(video, 0, 0, vw, vh); } catch (e) {}
-    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(draw);
+    try { cx.drawImage(video, 0, 0, cw, ch); } catch (e) {}
+    requestAnimationFrame(rafDraw);
   };
-  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(draw);
-  const rafDraw = () => { if (!drawing) return; try { cx.drawImage(video, 0, 0, vw, vh); } catch (e) {} requestAnimationFrame(rafDraw); };
-  requestAnimationFrame(rafDraw); /* Sicherheitsnetz, falls rVFC pausiert */
+  requestAnimationFrame(rafDraw);
 
   video.muted = !!opts.mute; video.volume = 1;
   rec.start(250);
