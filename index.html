@@ -252,6 +252,7 @@
       <div class="opts">
         <label class="switch"><input type="checkbox" id="setMute"> Ton entfernen</label>
         <label class="switch"><input type="checkbox" id="setCompress"> Datei komprimieren</label>
+        <label class="switch" title="Analysiert in größeren Schritten – deutlich schneller, kann sehr kurze Kill-Anzeigen selten übersehen"><input type="checkbox" id="setTurbo"> ⚡ Turbo (schneller)</label>
       </div>
     </div>
   </div>
@@ -277,7 +278,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "1.7";
+const APP_VERSION = "1.8";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -334,13 +335,15 @@ function loadSettings() {
     if (s.post != null) $("#setPost").value = s.post;
     if (s.mute != null) $("#setMute").checked = s.mute;
     if (s.compress != null) $("#setCompress").checked = s.compress;
+    if (s.turbo != null) $("#setTurbo").checked = s.turbo;
   } catch (e) {}
 }
 function saveSettings() {
   try {
     localStorage.setItem("kc_settings", JSON.stringify({
       pre: +$("#setPre").value, post: +$("#setPost").value,
-      mute: $("#setMute").checked, compress: $("#setCompress").checked
+      mute: $("#setMute").checked, compress: $("#setCompress").checked,
+      turbo: $("#setTurbo").checked
     }));
   } catch (e) {}
 }
@@ -349,10 +352,11 @@ function getSettings() {
     pre: Math.min(30, Math.max(0, +$("#setPre").value || 0)),
     post: Math.min(30, Math.max(0, +$("#setPost").value || 0)),
     mute: $("#setMute").checked,
-    compress: $("#setCompress").checked
+    compress: $("#setCompress").checked,
+    turbo: $("#setTurbo").checked
   };
 }
-["setPre", "setPost", "setMute", "setCompress"].forEach(id => $("#" + id).addEventListener("change", saveSettings));
+["setPre", "setPost", "setMute", "setCompress", "setTurbo"].forEach(id => $("#" + id).addEventListener("change", saveSettings));
 document.querySelectorAll("[data-step]").forEach(btn => {
   btn.addEventListener("click", () => {
     const [id, d] = btn.dataset.step.split(":");
@@ -477,7 +481,7 @@ async function fixDuration(video) {
   video.currentTime = 0;
   await waitEventT(video, "seeked", 8000);
 }
-async function scanVideo(job) {
+async function scanVideo(job, turbo) {
   const video = job.video;
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw) throw new Error("Video hat keine Bildspur");
@@ -507,7 +511,7 @@ async function scanVideo(job) {
   /* Deterministisches Abtasten: garantiert jeden Abschnitt geprüft – nichts wird übersprungen.
      Grober Schritt (0,5 s) für Tempo; sobald ein QR-Code gefunden wird, wird der genaue
      Start-Zeitpunkt rückwärts in feinen Schritten eingegrenzt (für exakten Vor-/Nachlauf). */
-  const STEP = 0.6, FINE = 0.15;
+  const STEP = turbo ? 1.2 : 0.6, FINE = 0.15;
   let t = 0;
   while (t < dur) {
     if (job.cancelled) break;
@@ -773,7 +777,7 @@ async function processJob(job) {
     job.setStatus("scan", "Analysiere");
     if (job.video.readyState < 1) await waitEvent(job.video, "loadedmetadata");
     await fixDuration(job.video);
-    job.hits = await scanVideo(job);
+    job.hits = await scanVideo(job, settings.turbo);
     if (job.cancelled) return;
     job.events = mergeHits(job.hits, job.video.duration, settings.pre, settings.post);
     renderTimeline(job);
