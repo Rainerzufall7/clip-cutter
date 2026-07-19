@@ -277,7 +277,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "1.5";
+const APP_VERSION = "1.6";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -608,29 +608,49 @@ async function cutEvent(job, start, end, label, opts) {
   video.playbackRate = 1;
   video.currentTime = start;
   await waitEventT(video, "seeked", 6000);
+
+  /* Frames auf eine eigene Zeichenfläche (Canvas) malen und DIE aufnehmen.
+     Kommt der Encoder nicht hinterher, lässt er nur Canvas-Frames weg – das
+     Video selbst läuft weiter. So bleibt der Schnitt auf keinem PC hängen. */
+  const vw = video.videoWidth || 1280, vh = video.videoHeight || 720;
+  const canvas = mkCanvas(vw, vh);
+  const cx = canvas.getContext("2d", { alpha: false });
+  cx.drawImage(video, 0, 0, vw, vh);
+
+  const capStream = canvas.captureStream(30);
   const dest = opts.mute ? null : ensureAudioGraph(job);
-  if (!job.capStream) job.capStream = video.captureStream ? video.captureStream() : video.mozCaptureStream();
-  const tracks = [...job.capStream.getVideoTracks()];
+  const tracks = [...capStream.getVideoTracks()];
   if (dest && dest.stream.getAudioTracks().length) tracks.push(dest.stream.getAudioTracks()[0]);
   const stream = new MediaStream(tracks);
+
   const mime = pickMime();
   const rec = new MediaRecorder(stream, {
     mimeType: mime || undefined,
-    videoBitsPerSecond: opts.compress ? 3_500_000 : 12_000_000,
-    audioBitsPerSecond: opts.compress ? 112_000 : 192_000
+    videoBitsPerSecond: opts.compress ? 2_500_000 : 6_000_000,
+    audioBitsPerSecond: opts.compress ? 96_000 : 160_000
   });
   const chunks = [];
   rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
   const stopped = new Promise(res => { rec.onstop = res; });
+
+  /* Frames zeichnen, solange geschnitten wird */
+  let drawing = true;
+  const draw = () => {
+    if (!drawing) return;
+    try { cx.drawImage(video, 0, 0, vw, vh); } catch (e) {}
+    if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(draw);
+  };
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(draw);
+  const rafDraw = () => { if (!drawing) return; try { cx.drawImage(video, 0, 0, vw, vh); } catch (e) {} requestAnimationFrame(rafDraw); };
+  requestAnimationFrame(rafDraw); /* Sicherheitsnetz, falls rVFC pausiert */
+
   video.muted = !!opts.mute; video.volume = 1;
   rec.start(250);
   await video.play();
-  /* Fortschritt per Intervall prüfen – mit Hänger-Schutz: bleibt das Video stecken,
-     wird es neu angestoßen; hilft das nicht, wird der Clip bis hierhin gespeichert. */
+  /* Fortschritt prüfen – mit Hänger-Schutz: stockt das Video, neu anstoßen bzw. überspringen */
   await new Promise(res => {
-    let lastT = -1, stuck = 0;
-    const maxMs = (end - start) * 1000 + 10000;
-    let elapsed = 0;
+    let lastT = -1, stuck = 0, elapsed = 0;
+    const maxMs = (end - start) * 1000 + 12000;
     const iv = setInterval(() => {
       elapsed += 200;
       const t = video.currentTime;
@@ -641,15 +661,18 @@ async function cutEvent(job, start, end, label, opts) {
       }
       if (Math.abs(t - lastT) < 0.01) {
         stuck += 200;
-        if (stuck === 1200 || stuck === 3000) { video.play().catch(function () {}); }
-        if (stuck >= 6000) { clearInterval(iv); res(); }
+        if (stuck === 1000 || stuck === 2600) { video.play().catch(function () {}); }
+        if (stuck === 4000) { try { video.currentTime = Math.min(end, t + 0.5); } catch (e) {} }
+        if (stuck >= 7000) { clearInterval(iv); res(); }
       } else { stuck = 0; lastT = t; }
     }, 200);
   });
+  drawing = false;
   video.pause();
   video.muted = true;
   try { if (rec.state !== "inactive") rec.stop(); } catch (e) {}
   await stopped;
+  try { capStream.getTracks().forEach(t => t.stop()); } catch (e) {}
   const type = mime || (chunks[0] && chunks[0].type) || "video/webm";
   return new Blob(chunks, { type });
 }
