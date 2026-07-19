@@ -267,6 +267,10 @@
 
   <div id="jobs"></div>
 
+  <div id="saveAllWrap" hidden style="text-align:center;margin-top:10px">
+    <button class="primary" id="btnSaveAllGlobal" style="padding:13px 40px;font-size:16px">💾&nbsp; ALLE Clips speichern</button>
+  </div>
+
   <footer class="note">
     Fertige Kill-Clips kannst du einzeln oder alle zusammen speichern – den Ordner wählst du selbst.
     <div style="margin-top:8px;opacity:.55" class="mono" id="verLbl"></div>
@@ -278,7 +282,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "2.0";
+const APP_VERSION = "2.1";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -807,6 +811,7 @@ async function processJob(job) {
       };
       job.clips.push(clip);
       addClipCard(job, clip, i + 1);
+      $("#saveAllWrap").hidden = false;
     }
     job.setStatus("done", job.clips.length + (job.clips.length === 1 ? " Kill" : " Kills"));
     job.setProgress(1, "Fertig! " + job.clips.length + " Kill-Clip" + (job.clips.length === 1 ? "" : "s") + " geschnitten.");
@@ -885,6 +890,12 @@ $("#fileVid").addEventListener("change", e => { enqueueFiles(e.target.files); e.
 drop.addEventListener("drop", e => enqueueFiles(e.dataTransfer.files));
 
 loadSettings();
+$("#btnSaveAllGlobal").addEventListener("click", () => {
+  const all = [];
+  for (const j of state.jobs) all.push(...j.clips);
+  if (!all.length) { toast("Noch keine fertigen Clips da.", true); return; }
+  saveClips(all);
+});
 $("#verLbl").textContent = "Version " + APP_VERSION;
 $("#updClose").addEventListener("click", () => { $("#updBar").hidden = true; });
 
