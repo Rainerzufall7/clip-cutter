@@ -282,7 +282,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "2.1";
+const APP_VERSION = "2.2";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -565,7 +565,10 @@ function mergeHits(hits, dur, pre, post) {
 
 /* ---------- Schneiden (MediaRecorder) ---------- */
 function pickMime() {
+  /* Hochwertige H.264-Profile zuerst (High/Main), Baseline nur als Notnagel */
   const list = [
+    'video/mp4;codecs="avc1.640028,mp4a.40.2"',
+    'video/mp4;codecs="avc1.4D0028,mp4a.40.2"',
     'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
     "video/mp4",
     'video/webm;codecs="h264,opus"',
@@ -613,7 +616,7 @@ async function cutEvent(job, start, end, label, opts) {
   cx.imageSmoothingQuality = "high";
   cx.drawImage(video, 0, 0, cw, ch);
 
-  const capStream = canvas.captureStream(30);
+  const capStream = canvas.captureStream(60);
   const dest = opts.mute ? null : ensureAudioGraph(job);
   const tracks = [...capStream.getVideoTracks()];
   if (dest && dest.stream.getAudioTracks().length) tracks.push(dest.stream.getAudioTracks()[0]);
@@ -622,8 +625,8 @@ async function cutEvent(job, start, end, label, opts) {
   const mime = pickMime();
   const rec = new MediaRecorder(stream, {
     mimeType: mime || undefined,
-    videoBitsPerSecond: opts.compress ? 3_000_000 : 10_000_000,
-    audioBitsPerSecond: opts.compress ? 96_000 : 160_000
+    videoBitsPerSecond: opts.compress ? 4_500_000 : 22_000_000,
+    audioBitsPerSecond: opts.compress ? 128_000 : 192_000
   });
   const chunks = [];
   rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
