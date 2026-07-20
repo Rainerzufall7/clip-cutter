@@ -282,7 +282,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "2.2";
+const APP_VERSION = "2.3";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -622,10 +622,17 @@ async function cutEvent(job, start, end, label, opts) {
   if (dest && dest.stream.getAudioTracks().length) tracks.push(dest.stream.getAudioTracks()[0]);
   const stream = new MediaStream(tracks);
 
+  /* Bitrate an die Qualität des Originals anpassen: mindestens 22 Mbit,
+     bei hochwertigen Aufnahmen bis 45 Mbit – so geht praktisch nichts verloren */
+  let targetBps = 22_000_000;
+  try {
+    const srcBps = (job.file.size * 8) / video.duration;
+    targetBps = Math.min(45_000_000, Math.max(22_000_000, Math.round(srcBps * 1.2)));
+  } catch (e) {}
   const mime = pickMime();
   const rec = new MediaRecorder(stream, {
     mimeType: mime || undefined,
-    videoBitsPerSecond: opts.compress ? 4_500_000 : 22_000_000,
+    videoBitsPerSecond: opts.compress ? 4_500_000 : targetBps,
     audioBitsPerSecond: opts.compress ? 128_000 : 192_000
   });
   const chunks = [];
