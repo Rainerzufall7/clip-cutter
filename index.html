@@ -282,7 +282,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "2.3";
+const APP_VERSION = "2.4";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -593,20 +593,21 @@ function ensureAudioGraph(job) {
   } catch (e) { job.audioDest = null; }
   return job.audioDest;
 }
-async function cutEvent(job, start, end, label, opts) {
+/* Nimmt einen Abschnitt auf. cfg.maxW = max. Breite, cfg.fps, cfg.mimes = bevorzugte Formate,
+   cfg.bps = Bitrate. Gibt ein Blob zurück (evtl. leer, falls der Encoder versagt). */
+async function recordSegment(job, start, end, label, opts, cfg) {
   const video = job.video;
   video.pause();
   video.playbackRate = 1;
   video.currentTime = start;
   await waitEventT(video, "seeked", 6000);
 
-  /* Frames auf eine eigene Zeichenfläche (Canvas) malen und DIE aufnehmen.
-     Kommt der Encoder nicht hinterher, lässt er nur Canvas-Frames weg – das
-     Video selbst läuft weiter. So bleibt der Schnitt auf keinem PC hängen.
-     WICHTIG: gerade Bildmaße (H.264 verlangt das, sonst wird das Bild zerstört)
-     und Auflösung auf max. 1920 begrenzen. */
+  /* Gerade Bildmaße (H.264 verlangt das) und Auflösung sicher begrenzen –
+     auch die Gesamtfläche, damit Ultrawide-Auflösungen den Encoder nicht sprengen. */
   const rawW = video.videoWidth || 1280, rawH = video.videoHeight || 720;
-  const fit = Math.min(1, 1920 / rawW);
+  const MAXAREA = cfg.maxW * (cfg.maxW * 9 / 16); /* z.B. 1920×1080 Fläche */
+  let fit = Math.min(1, cfg.maxW / rawW);
+  if (rawW * fit * rawH * fit > MAXAREA) fit = Math.sqrt(MAXAREA / (rawW * rawH));
   let cw = Math.round(rawW * fit), ch = Math.round(rawH * fit);
   cw -= cw % 2; ch -= ch % 2;
   if (cw < 2) cw = 2;
@@ -616,30 +617,28 @@ async function cutEvent(job, start, end, label, opts) {
   cx.imageSmoothingQuality = "high";
   cx.drawImage(video, 0, 0, cw, ch);
 
-  const capStream = canvas.captureStream(60);
+  const capStream = canvas.captureStream(cfg.fps);
   const dest = opts.mute ? null : ensureAudioGraph(job);
   const tracks = [...capStream.getVideoTracks()];
   if (dest && dest.stream.getAudioTracks().length) tracks.push(dest.stream.getAudioTracks()[0]);
   const stream = new MediaStream(tracks);
 
-  /* Bitrate an die Qualität des Originals anpassen: mindestens 22 Mbit,
-     bei hochwertigen Aufnahmen bis 45 Mbit – so geht praktisch nichts verloren */
-  let targetBps = 22_000_000;
+  let mime = "";
+  for (const m of cfg.mimes) { try { if (MediaRecorder.isTypeSupported(m)) { mime = m; break; } } catch (e) {} }
+  let rec;
   try {
-    const srcBps = (job.file.size * 8) / video.duration;
-    targetBps = Math.min(45_000_000, Math.max(22_000_000, Math.round(srcBps * 1.2)));
-  } catch (e) {}
-  const mime = pickMime();
-  const rec = new MediaRecorder(stream, {
-    mimeType: mime || undefined,
-    videoBitsPerSecond: opts.compress ? 4_500_000 : targetBps,
-    audioBitsPerSecond: opts.compress ? 128_000 : 192_000
-  });
+    rec = new MediaRecorder(stream, {
+      mimeType: mime || undefined,
+      videoBitsPerSecond: cfg.bps,
+      audioBitsPerSecond: opts.compress ? 128_000 : 192_000
+    });
+  } catch (e) {
+    try { rec = new MediaRecorder(stream); } catch (e2) { return new Blob([], { type: "video/webm" }); }
+  }
   const chunks = [];
   rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
   const stopped = new Promise(res => { rec.onstop = res; });
 
-  /* Eine einzige Zeichenschleife (requestAnimationFrame), zeichnet das aktuelle Videobild */
   let drawing = true;
   const rafDraw = () => {
     if (!drawing) return;
@@ -649,9 +648,8 @@ async function cutEvent(job, start, end, label, opts) {
   requestAnimationFrame(rafDraw);
 
   video.muted = !!opts.mute; video.volume = 1;
-  rec.start(250);
+  try { rec.start(250); } catch (e) { drawing = false; return new Blob([], { type: "video/webm" }); }
   await video.play();
-  /* Fortschritt prüfen – mit Hänger-Schutz: stockt das Video, neu anstoßen bzw. überspringen */
   await new Promise(res => {
     let lastT = -1, stuck = 0, elapsed = 0;
     const maxMs = (end - start) * 1000 + 12000;
@@ -679,6 +677,47 @@ async function cutEvent(job, start, end, label, opts) {
   try { capStream.getTracks().forEach(t => t.stop()); } catch (e) {}
   const type = mime || (chunks[0] && chunks[0].type) || "video/webm";
   return new Blob(chunks, { type });
+}
+
+async function cutEvent(job, start, end, label, opts) {
+  /* Bitrate an die Qualität des Originals anpassen (min. 22, bis 45 Mbit) */
+  let targetBps = 22_000_000;
+  try {
+    const srcBps = (job.file.size * 8) / job.video.duration;
+    targetBps = Math.min(45_000_000, Math.max(22_000_000, Math.round(srcBps * 1.2)));
+  } catch (e) {}
+
+  /* 1. Versuch: beste Qualität (H.264, bis 1920, 60 fps) */
+  let blob = await recordSegment(job, start, end, label, opts, {
+    maxW: 1920, fps: 60,
+    bps: opts.compress ? 4_500_000 : targetBps,
+    mimes: [
+      'video/mp4;codecs="avc1.640028,mp4a.40.2"',
+      'video/mp4;codecs="avc1.4D0028,mp4a.40.2"',
+      'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+      "video/mp4",
+      'video/webm;codecs="h264,opus"',
+      'video/webm;codecs="vp9,opus"',
+      "video/webm"
+    ]
+  });
+
+  /* Kam nichts Gültiges raus (z.B. ungewöhnliche/Ultrawide-Auflösung)? Sicheres Format nachschneiden. */
+  if (job.cancelled) return blob;
+  if (!blob || blob.size < 4096) {
+    if (job.setProgress) job.setProgress(0, "Ungewöhnliche Auflösung erkannt – schneide in sicherem Format neu …");
+    blob = await recordSegment(job, start, end, label, opts, {
+      maxW: 1280, fps: 30,
+      bps: opts.compress ? 3_500_000 : 12_000_000,
+      mimes: [
+        'video/webm;codecs="vp9,opus"',
+        'video/webm;codecs="vp8,opus"',
+        "video/webm",
+        "video/mp4"
+      ]
+    });
+  }
+  return blob;
 }
 
 /* ---------- Jobs / UI ---------- */
@@ -812,6 +851,11 @@ async function processJob(job) {
       if (job.cancelled) return;
       const [s, e] = job.events[i];
       const blob = await cutEvent(job, s, e, "Schneide Kill " + (i + 1) + " / " + job.events.length, settings);
+      if (job.cancelled) return;
+      if (!blob || blob.size < 4096) {
+        toast("Kill " + (i + 1) + " konnte nicht geschnitten werden (Encoder-Problem).", true);
+        continue;
+      }
       const ext = blob.type.includes("mp4") ? "mp4" : "webm";
       const clip = {
         name: base + "_Kill" + (i + 1) + "." + ext,
