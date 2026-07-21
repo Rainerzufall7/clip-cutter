@@ -282,7 +282,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "2.4";
+const APP_VERSION = "2.6";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -602,22 +602,33 @@ async function recordSegment(job, start, end, label, opts, cfg) {
   video.currentTime = start;
   await waitEventT(video, "seeked", 6000);
 
-  /* Gerade Bildmaße (H.264 verlangt das) und Auflösung sicher begrenzen –
-     auch die Gesamtfläche, damit Ultrawide-Auflösungen den Encoder nicht sprengen. */
   const rawW = video.videoWidth || 1280, rawH = video.videoHeight || 720;
-  const MAXAREA = cfg.maxW * (cfg.maxW * 9 / 16); /* z.B. 1920×1080 Fläche */
-  let fit = Math.min(1, cfg.maxW / rawW);
-  if (rawW * fit * rawH * fit > MAXAREA) fit = Math.sqrt(MAXAREA / (rawW * rawH));
-  let cw = Math.round(rawW * fit), ch = Math.round(rawH * fit);
-  cw -= cw % 2; ch -= ch % 2;
-  if (cw < 2) cw = 2;
-  if (ch < 2) ch = 2;
-  const canvas = mkCanvas(cw, ch);
-  const cx = canvas.getContext("2d", { alpha: false });
-  cx.imageSmoothingQuality = "high";
-  cx.drawImage(video, 0, 0, cw, ch);
+  let capStream, canvas = null, cx = null, cw = rawW, ch = rawH;
 
-  const capStream = canvas.captureStream(cfg.fps);
+  if (cfg.direct) {
+    /* Bild DIREKT vom Video abgreifen – volle Qualität, unabhängig davon ob das
+       Fenster im Vordergrund ist (Canvas-Zeichnen friert im Hintergrund ein!). */
+    if (!job.directStream) {
+      job.directStream = video.captureStream ? video.captureStream() : video.mozCaptureStream();
+    }
+    capStream = job.directStream;
+  } else {
+    /* Canvas-Variante: gerade Bildmaße (H.264 verlangt das) und Fläche sicher
+       begrenzen, damit auch Ultrawide-Auflösungen den Encoder nicht sprengen. */
+    const MAXAREA = cfg.maxW * (cfg.maxW * 9 / 16);
+    let fit = Math.min(1, cfg.maxW / rawW);
+    if (rawW * fit * rawH * fit > MAXAREA) fit = Math.sqrt(MAXAREA / (rawW * rawH));
+    cw = Math.round(rawW * fit); ch = Math.round(rawH * fit);
+    cw -= cw % 2; ch -= ch % 2;
+    if (cw < 2) cw = 2;
+    if (ch < 2) ch = 2;
+    canvas = mkCanvas(cw, ch);
+    cx = canvas.getContext("2d", { alpha: false });
+    cx.imageSmoothingQuality = "high";
+    cx.drawImage(video, 0, 0, cw, ch);
+    capStream = canvas.captureStream(cfg.fps);
+  }
+
   const dest = opts.mute ? null : ensureAudioGraph(job);
   const tracks = [...capStream.getVideoTracks()];
   if (dest && dest.stream.getAudioTracks().length) tracks.push(dest.stream.getAudioTracks()[0]);
@@ -639,13 +650,19 @@ async function recordSegment(job, start, end, label, opts, cfg) {
   rec.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
   const stopped = new Promise(res => { rec.onstop = res; });
 
+  /* Nur bei der Canvas-Variante muss gezeichnet werden. rVFC läuft frameweise,
+     rAF als Ergänzung – im Hintergrund liefert das weniger Bilder (daher ist
+     die Direkt-Variante oben der Standard). */
   let drawing = true;
-  const rafDraw = () => {
-    if (!drawing) return;
-    try { cx.drawImage(video, 0, 0, cw, ch); } catch (e) {}
+  if (cx) {
+    const paint = () => { try { cx.drawImage(video, 0, 0, cw, ch); } catch (e) {} };
+    const rafDraw = () => { if (!drawing) return; paint(); requestAnimationFrame(rafDraw); };
     requestAnimationFrame(rafDraw);
-  };
-  requestAnimationFrame(rafDraw);
+    if (video.requestVideoFrameCallback) {
+      const vfc = () => { if (!drawing) return; paint(); video.requestVideoFrameCallback(vfc); };
+      video.requestVideoFrameCallback(vfc);
+    }
+  }
 
   video.muted = !!opts.mute; video.volume = 1;
   try { rec.start(250); } catch (e) { drawing = false; return new Blob([], { type: "video/webm" }); }
@@ -674,47 +691,56 @@ async function recordSegment(job, start, end, label, opts, cfg) {
   video.muted = true;
   try { if (rec.state !== "inactive") rec.stop(); } catch (e) {}
   await stopped;
-  try { capStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+  /* Nur den Canvas-Stream beenden – der Direkt-Stream wird für weitere Kills wiederverwendet */
+  if (!cfg.direct) { try { capStream.getTracks().forEach(t => t.stop()); } catch (e) {} }
   const type = mime || (chunks[0] && chunks[0].type) || "video/webm";
   return new Blob(chunks, { type });
 }
 
 async function cutEvent(job, start, end, label, opts) {
-  /* Bitrate an die Qualität des Originals anpassen (min. 22, bis 45 Mbit) */
-  let targetBps = 22_000_000;
-  try {
-    const srcBps = (job.file.size * 8) / job.video.duration;
-    targetBps = Math.min(45_000_000, Math.max(22_000_000, Math.round(srcBps * 1.2)));
-  } catch (e) {}
+  const video = job.video;
+  const rawW = video.videoWidth || 1920, rawH = video.videoHeight || 1080;
+  let srcBps = 0;
+  try { srcBps = (job.file.size * 8) / video.duration; } catch (e) {}
 
-  /* 1. Versuch: beste Qualität (H.264, bis 1920, 60 fps) */
+  const H264 = [
+    'video/mp4;codecs="avc1.640033,mp4a.40.2"',
+    'video/mp4;codecs="avc1.640028,mp4a.40.2"',
+    'video/mp4;codecs="avc1.4D0028,mp4a.40.2"',
+    'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
+    "video/mp4",
+    'video/webm;codecs="h264,opus"'
+  ];
+  const WEBM = ['video/webm;codecs="vp9,opus"', 'video/webm;codecs="vp8,opus"', "video/webm"];
+
+  /* Bitrate aus Auflösung UND Original-Qualität – je größer das Bild, desto mehr Datenrate */
+  const bpsFor = (maxW, fps) => {
+    if (opts.compress) return maxW >= 2560 ? 6_000_000 : 4_500_000;
+    const area = Math.min(maxW * (maxW * 9 / 16), rawW * rawH);
+    const byRes = Math.round(area * fps * 0.15); /* ~0,15 Bit pro Pixel */
+    return Math.min(70_000_000, Math.max(24_000_000, byRes, Math.round(srcBps * 1.3)));
+  };
+
+  /* 1. Beste Qualität: Bild direkt vom Video (volle Auflösung, läuft auch im Hintergrund) */
   let blob = await recordSegment(job, start, end, label, opts, {
-    maxW: 1920, fps: 60,
-    bps: opts.compress ? 4_500_000 : targetBps,
-    mimes: [
-      'video/mp4;codecs="avc1.640028,mp4a.40.2"',
-      'video/mp4;codecs="avc1.4D0028,mp4a.40.2"',
-      'video/mp4;codecs="avc1.42E01E,mp4a.40.2"',
-      "video/mp4",
-      'video/webm;codecs="h264,opus"',
-      'video/webm;codecs="vp9,opus"',
-      "video/webm"
-    ]
+    direct: true, maxW: 2560, fps: 60, bps: bpsFor(2560, 60), mimes: H264
   });
 
-  /* Kam nichts Gültiges raus (z.B. ungewöhnliche/Ultrawide-Auflösung)? Sicheres Format nachschneiden. */
+  /* 2. Falls das nicht klappt: über Canvas, bis 1080p */
   if (job.cancelled) return blob;
   if (!blob || blob.size < 4096) {
-    if (job.setProgress) job.setProgress(0, "Ungewöhnliche Auflösung erkannt – schneide in sicherem Format neu …");
+    job.setProgress(0, "Neuer Versuch in 1080p …");
     blob = await recordSegment(job, start, end, label, opts, {
-      maxW: 1280, fps: 30,
-      bps: opts.compress ? 3_500_000 : 12_000_000,
-      mimes: [
-        'video/webm;codecs="vp9,opus"',
-        'video/webm;codecs="vp8,opus"',
-        "video/webm",
-        "video/mp4"
-      ]
+      maxW: 1920, fps: 60, bps: bpsFor(1920, 60), mimes: H264
+    });
+  }
+
+  /* 3. Letzter Versuch: weiterhin 1080p, aber sicheres Format (WebM) */
+  if (job.cancelled) return blob;
+  if (!blob || blob.size < 4096) {
+    job.setProgress(0, "Ungewöhnliche Auflösung – schneide in sicherem Format (1080p) …");
+    blob = await recordSegment(job, start, end, label, opts, {
+      maxW: 1920, fps: 30, bps: bpsFor(1920, 30), mimes: WEBM
     });
   }
   return blob;
