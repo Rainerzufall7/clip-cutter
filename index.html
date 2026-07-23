@@ -282,7 +282,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "2.7";
+const APP_VERSION = "2.8";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -489,10 +489,10 @@ async function scanVideo(job, turbo) {
   const video = job.video;
   const vw = video.videoWidth, vh = video.videoHeight;
   if (!vw) throw new Error("Video hat keine Bildspur");
-  /* Nur der Bereich unten links wird analysiert – dort sitzt der QR-Code.
-     Auflösung bis 1280 px Breite: scharf genug, damit auch kleine QR-Codes erkannt werden. */
-  const sx = 0, sy = Math.round(vh * 0.35);
-  const sw = Math.round(vw * 0.48), sh = vh - sy;
+  /* Das GANZE Bild wird durchsucht – so wird der QR-Code gefunden, egal wo er
+     auf dem Bildschirm sitzt (HUD-Position ist je nach Server unterschiedlich). */
+  const sx = 0, sy = 0;
+  const sw = vw, sh = vh;
   const scale = Math.min(1, 1280 / sw);
   const cw = Math.max(1, Math.round(sw * scale)), ch = Math.max(1, Math.round(sh * scale));
   const cQr = mkCanvas(cw, ch);
