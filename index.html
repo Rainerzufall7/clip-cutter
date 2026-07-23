@@ -282,7 +282,7 @@
 
 <script>
 "use strict";
-const APP_VERSION = "2.6";
+const APP_VERSION = "2.7";
 const $ = (s, el) => (el || document).querySelector(s);
 const SAMPLE_DT = 0.30;
 
@@ -721,12 +721,13 @@ async function cutEvent(job, start, end, label, opts) {
     return Math.min(70_000_000, Math.max(24_000_000, byRes, Math.round(srcBps * 1.3)));
   };
 
-  /* 1. Beste Qualität: Bild direkt vom Video (volle Auflösung, läuft auch im Hintergrund) */
+  /* 1. Beste Qualität: über Canvas mit fester Bildrate (gleichmäßiges, flüssiges Timing –
+     der Direkt-Abgriff lieferte ungleichmäßige Frames = Ruckeln). Volle Auflösung bis 1440p. */
   let blob = await recordSegment(job, start, end, label, opts, {
-    direct: true, maxW: 2560, fps: 60, bps: bpsFor(2560, 60), mimes: H264
+    maxW: 2560, fps: 60, bps: bpsFor(2560, 60), mimes: H264
   });
 
-  /* 2. Falls das nicht klappt: über Canvas, bis 1080p */
+  /* 2. Falls der Encoder das nicht schafft: 1080p */
   if (job.cancelled) return blob;
   if (!blob || blob.size < 4096) {
     job.setProgress(0, "Neuer Versuch in 1080p …");
